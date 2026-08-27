@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 struct GraphQLError: LocalizedError { let message: String; var errorDescription: String? { message } }
 

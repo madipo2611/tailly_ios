@@ -40,7 +40,7 @@ struct ExploreView: View {
     }
     private func recordView(of item: ExploreItem) async {
         struct Response: Decodable { let recordExploreInteraction: Bool }
-        _ = try? await api.perform(GraphQLOperations.recordExploreInteraction, variables: ["contentId": .int(item.contentId), "contentType": .string(item.contentType), "interactionType": .string("view")]) as Response
+        let _: Response? = try? await api.perform(GraphQLOperations.recordExploreInteraction, variables: ["contentId": .int(item.contentId), "contentType": .string(item.contentType), "interactionType": .string("view")])
     }
 }
 
