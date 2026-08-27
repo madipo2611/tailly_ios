@@ -22,4 +22,4 @@ jobs:
         # xcodegen ищет project.yml в текущей директории (корень)
       
       - name: Build and test
-        run: xcodebuild test -project Tailly.xcodeproj -scheme Tailly -destination 'platform=iOS Simulator,name=iPhone 16'
+        run: xcodebuild test -project Tailly.xcodeproj -scheme Tailly -destination 'platform=iOS Simulator,name=iPhone 17'
