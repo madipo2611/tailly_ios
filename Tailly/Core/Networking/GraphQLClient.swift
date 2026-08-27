@@ -64,13 +64,19 @@ final class GraphQLClient: @unchecked Sendable {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(GraphQLRequest(query: operation, variables: variables))
         }
-        let (data, response) = try await urlSession.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await urlSession.data(for: request)
+        } catch {
+            throw userFacingNetworkError(for: error)
+        }
         guard let http = response as? HTTPURLResponse else { throw GraphQLError(message: "Некорректный ответ сервера") }
         if http.statusCode == 401, retryingAfterRefresh {
             try await refreshAccessToken(force: true, failingAccessToken: request.value(forHTTPHeaderField: "Authorization"))
             return try await perform(operation, variables: variables, upload: upload, retryingAfterRefresh: false)
         }
-        guard http.statusCode == 200 else { throw GraphQLError(message: "GraphQL server is unavailable") }
+        guard http.statusCode == 200 else { throw GraphQLError(message: serverErrorMessage(for: http.statusCode)) }
         let payload = try JSONDecoder().decode(GraphQLResponse<Data>.self, from: data)
         if let error = payload.errors?.first {
             if error.isUnauthenticated, retryingAfterRefresh {
@@ -104,7 +110,13 @@ final class GraphQLClient: @unchecked Sendable {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.setValue("true", forHTTPHeaderField: "bypass-auth")
         request.httpBody = try JSONEncoder().encode(GraphQLRequest(query: "mutation Refresh($refreshToken: String!) { refreshTokens(refreshToken: $refreshToken) { accessToken refreshToken } }", variables: ["refreshToken": .string(refreshToken)]))
-        let (data, response) = try await urlSession.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await urlSession.data(for: request)
+        } catch {
+            throw userFacingNetworkError(for: error)
+        }
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw GraphQLError(message: "Не удалось обновить сессию") }
         let payload = try JSONDecoder().decode(GraphQLResponse<RefreshResponse>.self, from: data)
         if let error = payload.errors?.first { throw GraphQLError(message: error.message) }
@@ -129,6 +141,27 @@ final class GraphQLClient: @unchecked Sendable {
               let data = Data(base64Encoded: String(part).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/").padding(toLength: ((part.count + 3) / 4) * 4, withPad: "=", startingAt: 0)),
               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let expiration = payload["exp"] as? TimeInterval else { return true }
         return Date().timeIntervalSince1970 + leeway >= expiration
+    }
+
+    private func userFacingNetworkError(for error: Error) -> GraphQLError {
+        guard let urlError = error as? URLError else { return GraphQLError(message: "Не удалось выполнить запрос. Повторите попытку.") }
+        switch urlError.code {
+        case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff:
+            return GraphQLError(message: "Нет подключения к интернету. Проверьте сеть и повторите попытку.")
+        case .timedOut:
+            return GraphQLError(message: "Сервер не ответил вовремя. Повторите попытку.")
+        case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed:
+            return GraphQLError(message: "Сервер временно недоступен. Повторите попытку позже.")
+        default:
+            return GraphQLError(message: "Не удалось выполнить запрос. Повторите попытку.")
+        }
+    }
+
+    private func serverErrorMessage(for statusCode: Int) -> String {
+        switch statusCode {
+        case 500...599: return "Сервер временно недоступен. Повторите попытку позже."
+        default: return "Не удалось выполнить запрос. Повторите попытку."
+        }
     }
 }
 

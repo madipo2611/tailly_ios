@@ -24,6 +24,46 @@ final class TaillyTests: XCTestCase {
         XCTAssertEqual(response.value, 42)
     }
 
+    func testOfflineErrorHasActionableRussianMessage() async {
+        URLProtocolStub.handler = { _ in throw URLError(.notConnectedToInternet) }
+
+        struct Response: Decodable { let value: Int }
+        do {
+            let _: Response = try await makeClient().perform("query Value { value }")
+            XCTFail("Expected an offline error")
+        } catch let error as GraphQLError {
+            XCTAssertEqual(error.errorDescription, "Нет подключения к интернету. Проверьте сеть и повторите попытку.")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testUploadUsesGraphQLMultipartRequestFormat() async throws {
+        URLProtocolStub.handler = { request in
+            let contentType = try XCTUnwrap(request.value(forHTTPHeaderField: "Content-Type"))
+            XCTAssertTrue(contentType.hasPrefix("multipart/form-data; boundary=TaillyBoundary-"))
+            let body = try XCTUnwrap(String(data: request.httpBody, encoding: .utf8))
+            XCTAssertTrue(body.contains("name=\"operations\""))
+            XCTAssertTrue(body.contains("\"content\":null"))
+            XCTAssertTrue(body.contains("name=\"map\""))
+            XCTAssertTrue(body.contains("\"0\":[\"variables.content\"]"))
+            XCTAssertTrue(body.contains("filename=\"photo.jpg\""))
+            XCTAssertTrue(body.contains("image/jpeg"))
+            XCTAssertTrue(body.contains("image-data"))
+            return .json("{\"data\":{\"uploaded\":true}}")
+        }
+
+        struct Response: Decodable { let uploaded: Bool }
+        let response: Response = try await makeClient().performUpload(
+            "mutation Upload($content: Upload!) { upload(content: $content) { uploaded } }",
+            variables: ["content": .string("placeholder")],
+            upload: GraphQLUpload(data: Data("image-data".utf8), filename: "photo.jpg", mimeType: "image/jpeg"),
+            variableName: "content"
+        )
+
+        XCTAssertTrue(response.uploaded)
+    }
+
     func testUnauthenticatedResponseRefreshesAndRetriesOnce() async throws {
         let session = SessionStore()
         defer { session.signOut() }

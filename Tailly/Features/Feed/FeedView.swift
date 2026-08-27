@@ -7,13 +7,16 @@ struct FeedView: View {
     @State private var error: String?
     @State private var isLoadingMore = false
     @State private var reachedEnd = false
+    @State private var selectedStory: StorySelection?
 
     var body: some View {
         NavigationStack {
             TaillyScreen {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
-                        StoryRail(items: stories)
+                        StoryRail(items: stories) { itemIndex in
+                            selectedStory = StorySelection(itemIndex: itemIndex)
+                        }
                         ForEach(posts) { post in
                             PostCard(
                                 post: post,
@@ -41,6 +44,9 @@ struct FeedView: View {
             }
         }
         .task { await load(reset: true) }
+        .fullScreenCover(item: $selectedStory) { selection in
+            StoryViewer(items: stories, initialItemIndex: selection.itemIndex)
+        }
     }
 
     private func load(reset: Bool) async {
@@ -107,18 +113,215 @@ private struct StoriesResponse: Decodable { let storyFeed: StoryFeed }
 private struct LikeResponse: Decodable { let id: Int; let likesCount: Int; let isLiked: Bool }
 private struct ExploreInteractionResponse: Decodable { let recordExploreInteraction: Bool }
 
+private struct StorySelection: Identifiable {
+    let itemIndex: Int
+    var id: Int { itemIndex }
+}
+
 private struct StoryRail: View {
     let items: [StoryFeedItem]
+    let onSelect: (Int) -> Void
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack {
-                ForEach(items) { item in
-                    VStack {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    Button { onSelect(index) } label: {
+                        VStack {
                         Circle().stroke(item.unseenCount > 0 ? TaillyTheme.accent : TaillyTheme.muted, lineWidth: 3).frame(width: 64, height: 64).overlay { Text(String(item.author.username.prefix(1)).uppercased()).font(.title2) }
                         Text(item.author.username).font(.caption).lineLimit(1)
+                        }
                     }
+                    .buttonStyle(.plain)
                 }
             }.padding(.horizontal)
+        }
+    }
+}
+
+private struct StoryViewer: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.graphQLClient) private var api
+    let items: [StoryFeedItem]
+    let initialItemIndex: Int
+    @State private var itemIndex: Int
+    @State private var storyIndex = 0
+    @State private var error: String?
+    @State private var progress = 0.0
+    @State private var reactionByStoryID: [Int: String] = [:]
+    @State private var replyText = ""
+    @State private var replySent = false
+
+    init(items: [StoryFeedItem], initialItemIndex: Int) {
+        self.items = items
+        self.initialItemIndex = initialItemIndex
+        _itemIndex = State(initialValue: initialItemIndex)
+    }
+
+    private var currentItem: StoryFeedItem? { items.indices.contains(itemIndex) ? items[itemIndex] : nil }
+    private var currentStory: Story? {
+        guard let currentItem, currentItem.stories.indices.contains(storyIndex) else { return nil }
+        return currentItem.stories[storyIndex]
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let story = currentStory, let item = currentItem {
+                VStack(spacing: 12) {
+                    HStack(spacing: 4) {
+                        ForEach(item.stories.indices, id: \.self) { index in
+                            GeometryReader { proxy in
+                                Capsule().fill(Color.white.opacity(0.35))
+                                Capsule().fill(Color.white).frame(width: progressWidth(for: index, total: proxy.size.width))
+                            }
+                            .frame(height: 3)
+                        }
+                    }
+                    .padding(.horizontal)
+                    HStack {
+                        Text(item.author.username).fontWeight(.semibold)
+                        Spacer()
+                        Button { dismiss() } label: { Image(systemName: "xmark.circle.fill").font(.title2) }
+                    }
+                    .padding(.horizontal)
+                    Spacer()
+                    AsyncImage(url: URL(string: story.sourceUrl.isEmpty ? (story.previewUrl ?? "") : story.sourceUrl)) { image in
+                        image.resizable().scaledToFit()
+                    } placeholder: {
+                        ProgressView().tint(.white)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if !story.caption.isEmpty { Text(story.caption).multilineTextAlignment(.center).padding(.horizontal) }
+                    HStack(spacing: 16) {
+                        ForEach(StoryReaction.allCases, id: \.rawValue) { reaction in
+                            Button(reaction.emoji) { Task { await toggleReaction(reaction, storyID: story.id) } }
+                                .font(.title2)
+                                .padding(8)
+                                .background(reactionByStoryID[story.id] == reaction.rawValue ? Color.white.opacity(0.28) : .clear, in: Circle())
+                                .accessibilityLabel("Реакция \(reaction.name)")
+                        }
+                    }
+                    HStack {
+                        TextField("Ответить…", text: $replyText)
+                            .textFieldStyle(.roundedBorder)
+                        Button { Task { await sendReply(to: story.id) } } label: { Image(systemName: "paperplane.fill") }
+                            .disabled(replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .accessibilityLabel("Отправить ответ")
+                    }
+                    .padding(.horizontal)
+                    if replySent { Text("Ответ отправлен").font(.caption).foregroundStyle(.green) }
+                    if let error { Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal) }
+                    Spacer(minLength: 8)
+                }
+                .foregroundStyle(.white)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 20).onEnded { value in
+                    if value.translation.width < -40 { nextStory() }
+                    if value.translation.width > 40 { previousStory() }
+                })
+                .task(id: story.id) { await showStory(story.id) }
+            } else {
+                ProgressView().tint(.white)
+            }
+        }
+    }
+
+    private func nextStory() {
+        guard let item = currentItem else { return }
+        if storyIndex + 1 < item.stories.count { storyIndex += 1 }
+        else if itemIndex + 1 < items.count { itemIndex += 1; storyIndex = 0 }
+        else { dismiss() }
+    }
+
+    private func previousStory() {
+        if storyIndex > 0 { storyIndex -= 1 }
+        else if itemIndex > 0 { itemIndex -= 1; storyIndex = max(0, (items[itemIndex].stories.count - 1)) }
+    }
+
+    private func progressWidth(for index: Int, total: CGFloat) -> CGFloat {
+        if index < storyIndex { return total }
+        if index == storyIndex { return total * progress }
+        return 0
+    }
+
+    private func showStory(_ storyID: Int) async {
+        progress = 0
+        replyText = ""
+        replySent = false
+        await markSeen(storyID)
+        withAnimation(.linear(duration: 5)) { progress = 1 }
+        try? await Task.sleep(for: .seconds(5))
+        guard !Task.isCancelled else { return }
+        nextStory()
+    }
+
+    private func markSeen(_ storyID: Int) async {
+        let event: JSONValue = .object([
+            "storyId": .int(storyID),
+            "viewedAt": .string(ISO8601DateFormatter().string(from: Date())),
+            "viewDurationMs": .int(0)
+        ])
+        do {
+            let _: MarkStoriesSeenResponse = try await api.perform(GraphQLOperations.markStoriesSeen, variables: ["events": .array([event])])
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func toggleReaction(_ reaction: StoryReaction, storyID: Int) async {
+        let previous = reactionByStoryID[storyID]
+        reactionByStoryID[storyID] = previous == reaction.rawValue ? nil : reaction.rawValue
+        do {
+            if previous == reaction.rawValue {
+                let _: RemoveStoryReactionResponse = try await api.perform(GraphQLOperations.removeStoryReaction, variables: ["storyId": .int(storyID)])
+            } else {
+                let _: StoryReactionResponse = try await api.perform(GraphQLOperations.reactToStory, variables: ["storyId": .int(storyID), "reactionType": .string(reaction.rawValue)])
+            }
+        } catch {
+            reactionByStoryID[storyID] = previous
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func sendReply(to storyID: Int) async {
+        let text = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        do {
+            let _: StoryReplyResponse = try await api.perform(GraphQLOperations.sendStoryReply, variables: [
+                "storyId": .int(storyID), "replyType": .string("TEXT"), "text": .string(text)
+            ])
+            replyText = ""
+            replySent = true
+            error = nil
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct MarkStoriesSeenResponse: Decodable { let markStoriesSeen: Int }
+private struct StoryReactionResponse: Decodable { let reactToStory: StoryReactionResult }
+private struct RemoveStoryReactionResponse: Decodable { let removeStoryReaction: Bool }
+private struct StoryReactionResult: Decodable { let id: Int }
+private struct StoryReplyResponse: Decodable { let sendStoryReply: StoryReplyResult }
+private struct StoryReplyResult: Decodable { let id: Int }
+
+private enum StoryReaction: String, CaseIterable {
+    case like = "LIKE", love = "LOVE", fire = "FIRE", laugh = "LAUGH", wow = "WOW", sad = "SAD"
+    var emoji: String {
+        switch self {
+        case .like: return "👍"
+        case .love: return "❤️"
+        case .fire: return "🔥"
+        case .laugh: return "😂"
+        case .wow: return "😮"
+        case .sad: return "😢"
+        }
+    }
+    var name: String {
+        switch self {
+        case .like: return "нравится"
+        case .love: return "любовь"
+        case .fire: return "огонь"
+        case .laugh: return "смех"
+        case .wow: return "удивление"
+        case .sad: return "грусть"
         }
     }
 }
