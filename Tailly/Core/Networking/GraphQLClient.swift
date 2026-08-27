@@ -10,7 +10,7 @@ struct GraphQLUpload {
 }
 
 private struct GraphQLRequest: Encodable { let query: String; let variables: [String: JSONValue]? }
-private struct GraphQLResponse<Data: Decodable>: Decodable { let data: Data?; let errors: [GraphQLErrorPayload]? }
+private struct GraphQLResponse<Result: Decodable>: Decodable { let data: Result?; let errors: [GraphQLErrorPayload]? }
 private struct GraphQLErrorPayload: Decodable {
     let message: String
     let extensions: Extensions?
@@ -39,21 +39,21 @@ final class GraphQLClient: @unchecked Sendable {
         self.session = session; self.urlSession = urlSession; self.endpoint = endpoint
     }
 
-    func perform<Data: Decodable>(_ operation: String, variables: [String: JSONValue]? = nil) async throws -> Data {
+    func perform<Result: Decodable>(_ operation: String, variables: [String: JSONValue]? = nil) async throws -> Result {
         try await refreshAccessTokenIfNeeded()
         return try await perform(operation, variables: variables, upload: nil, retryingAfterRefresh: true)
     }
 
     /// Sends a request compliant with the GraphQL multipart request specification.
     /// `variableName` is a top-level variable such as `content` or `video`.
-    func performUpload<Data: Decodable>(_ operation: String, variables: [String: JSONValue], upload: GraphQLUpload, variableName: String) async throws -> Data {
+    func performUpload<Result: Decodable>(_ operation: String, variables: [String: JSONValue], upload: GraphQLUpload, variableName: String) async throws -> Result {
         try await refreshAccessTokenIfNeeded()
         var variables = variables
         variables[variableName] = .null
         return try await perform(operation, variables: variables, upload: (upload, variableName), retryingAfterRefresh: true)
     }
 
-    private func perform<Data: Decodable>(_ operation: String, variables: [String: JSONValue]?, upload: (GraphQLUpload, String)?, retryingAfterRefresh: Bool) async throws -> Data {
+    private func perform<Result: Decodable>(_ operation: String, variables: [String: JSONValue]?, upload: (GraphQLUpload, String)?, retryingAfterRefresh: Bool) async throws -> Result {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         if let token = session.accessToken { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
@@ -78,7 +78,7 @@ final class GraphQLClient: @unchecked Sendable {
             return try await perform(operation, variables: variables, upload: upload, retryingAfterRefresh: false)
         }
         guard http.statusCode == 200 else { throw GraphQLError(message: serverErrorMessage(for: http.statusCode)) }
-        let payload = try JSONDecoder().decode(GraphQLResponse<Data>.self, from: data)
+        let payload = try JSONDecoder().decode(GraphQLResponse<Result>.self, from: data)
         if let error = payload.errors?.first {
             if error.isUnauthenticated, retryingAfterRefresh {
                 try await refreshAccessToken(force: true, failingAccessToken: request.value(forHTTPHeaderField: "Authorization"))
