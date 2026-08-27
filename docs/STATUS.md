@@ -14,8 +14,8 @@
 - Лента выполняет реальные GraphQL-запросы `postsPaginated` и `storyFeed`; клипы — `clips`; профиль получает `me`.
 - Реализован раздел «Интересное»: смешанная рекомендательная лента `exploreFeed`, фильтры фото/клипов, бесконечная пагинация и запись события просмотра в recommender через gateway.
 - Transport: single-flight refresh-token для конкурентных запросов, повтор одного запроса после HTTP `401`/GraphQL `UNAUTHENTICATED`, а также `URLSession` GraphQL multipart upload (`performUpload`) для `Upload`.
-- В ленте: реальные like/unlike, просмотр и отправка комментариев к постам.
-- Добавлен задел WebSocket-клиента, GitHub Actions с macOS runner и базовый unit test.
+- В ленте: реальные like/unlike с optimistic update, pagination, просмотр комментариев, их отправка и ответы на комментарии; действия like/comment отправляются в recommender.
+- Добавлен задел WebSocket-клиента, GitHub Actions с macOS runner и URLProtocol unit-тесты GraphQL transport (успешный ответ и `UNAUTHENTICATED` refresh/retry).
 
 ## Важный API-контракт
 
@@ -25,7 +25,7 @@
 | --- | --- | --- |
 | HTTP GraphQL | `https://tailly.ru/query` | подключён |
 | Авторизация | `login`, `register`, `refreshTokens`, `me` | подключены; single-flight refresh и retry подключены |
-| Посты | `postsPaginated`, `createPost`, comments, likes | чтение, likes и комментарии подключены; фото-пост создаётся через multipart Upload |
+| Посты | `postsPaginated`, `createPost`, comments, likes | pagination, optimistic likes, комментарии и ответы подключены; фото-пост создаётся через multipart Upload |
 | Истории | `storyFeed`, `userStories`, create/seen/reactions/replies | чтение ленты подключено |
 | Клипы | `clips`, comments, likes, `createClip` | чтение, likes и комментарии подключены; video upload UI ещё нет |
 | Интересное | `exploreFeed`, `recordExploreInteraction` | подключён базовый список/filters/view event |
@@ -50,9 +50,9 @@ stories · clips · messages · subscribers · recommender
 
 ## План работ
 
-1. **Стабилизировать transport:** single-flight refresh, `UNAUTHENTICATED` retry и multipart Upload готовы; добавить понятные состояния offline/error и XCTest URLProtocol-моки.
+1. **Стабилизировать transport:** single-flight refresh, `UNAUTHENTICATED` retry, multipart Upload и XCTest URLProtocol-моки готовы; добавить понятные состояния offline/error и тест конкурентного refresh.
 2. **Завершить auth/profile:** редактирование профиля, подписки, Keychain migration, logout и тесты. Регистрация и `me` подключены.
-3. **Лента и «Интересное»:** post likes и базовые комментарии готовы; далее pagination, ответы, просмотр поста/клипа, image caching, accessibility и локальные optimistic updates; добавить события like/comment/skip в recommender.
+3. **Лента и «Интересное»:** post pagination, optimistic likes, комментарии и ответы готовы; далее просмотр поста/клипа, image caching, accessibility и события like/comment/skip в recommender.
 4. **Истории:** viewer с прогрессом, просмотр/mark seen, реакции/ответы, камера/медиапикер, upload, архив/highlights.
 5. **Клипы:** AVPlayer, автозапуск и prefetch, comments/likes, загрузка видео, обработка ошибок HLS/preview.
 6. **Сообщения:** подтвердить WS протокол на staging, chats/messages/send/status, lifecycle reconnect/backoff, deduplication и background notifications.
