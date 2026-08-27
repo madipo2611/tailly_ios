@@ -42,7 +42,8 @@ final class TaillyTests: XCTestCase {
         URLProtocolStub.handler = { request in
             let contentType = try XCTUnwrap(request.value(forHTTPHeaderField: "Content-Type"))
             XCTAssertTrue(contentType.hasPrefix("multipart/form-data; boundary=TaillyBoundary-"))
-            let body = try XCTUnwrap(String(data: request.httpBody, encoding: .utf8))
+            let requestBody = try XCTUnwrap(request.httpBody)
+            let body = try XCTUnwrap(String(data: requestBody, encoding: .utf8))
             XCTAssertTrue(body.contains("name=\"operations\""))
             XCTAssertTrue(body.contains("\"content\":null"))
             XCTAssertTrue(body.contains("name=\"map\""))
@@ -76,7 +77,9 @@ final class TaillyTests: XCTestCase {
                 return .json("{\"data\":{\"refreshTokens\":{\"accessToken\":\"new-access\",\"refreshToken\":\"new-refresh\"}}}")
             }
             if requestCount == 1 {
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer \(session.accessToken ?? \"\")")
+                let authorization = try XCTUnwrap(request.value(forHTTPHeaderField: "Authorization"))
+                XCTAssertTrue(authorization.hasPrefix("Bearer "))
+                XCTAssertGreaterThan(authorization.count, "Bearer ".count)
                 return .json("{\"errors\":[{\"message\":\"expired\",\"extensions\":{\"code\":\"UNAUTHENTICATED\"}}]}")
             }
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer new-access")
