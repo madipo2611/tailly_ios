@@ -28,3 +28,4 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ru.tailly.ios.tests
+        GENERATE_INFOPLIST_FILE: YES
