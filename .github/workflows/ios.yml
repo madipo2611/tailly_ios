@@ -1,0 +1,23 @@
+name: iOS CI
+
+on:
+  push:
+    paths: [tailly_ios/**]
+  pull_request:
+    paths: [tailly_ios/**]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: tailly_ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build and test
+        run: xcodebuild test -project Tailly.xcodeproj -scheme Tailly -destination 'platform=iOS Simulator,name=iPhone 16'
