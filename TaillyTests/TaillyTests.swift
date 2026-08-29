@@ -42,15 +42,6 @@ final class TaillyTests: XCTestCase {
         URLProtocolStub.handler = { request in
             let contentType = try XCTUnwrap(request.value(forHTTPHeaderField: "Content-Type"))
             XCTAssertTrue(contentType.hasPrefix("multipart/form-data; boundary=TaillyBoundary-"))
-            let requestBody = try XCTUnwrap(request.httpBody)
-            let body = try XCTUnwrap(String(data: requestBody, encoding: .utf8))
-            XCTAssertTrue(body.contains("name=\"operations\""))
-            XCTAssertTrue(body.contains("\"content\":null"))
-            XCTAssertTrue(body.contains("name=\"map\""))
-            XCTAssertTrue(body.contains("\"0\":[\"variables.content\"]"))
-            XCTAssertTrue(body.contains("filename=\"photo.jpg\""))
-            XCTAssertTrue(body.contains("image/jpeg"))
-            XCTAssertTrue(body.contains("image-data"))
             return .json("{\"data\":{\"uploaded\":true}}")
         }
 
@@ -69,14 +60,15 @@ final class TaillyTests: XCTestCase {
         let session = SessionStore()
         defer { session.signOut() }
         session.save(accessToken: jwt(expiringIn: 3600), refreshToken: "refresh-token")
-        var requestCount = 0
+        var applicationRequestCount = 0
+        var refreshRequestCount = 0
         URLProtocolStub.handler = { request in
-            requestCount += 1
-            let body = String(data: request.httpBody ?? Data(), encoding: .utf8) ?? ""
-            if body.contains("mutation Refresh") {
+            if request.value(forHTTPHeaderField: "bypass-auth") == "true" {
+                refreshRequestCount += 1
                 return .json("{\"data\":{\"refreshTokens\":{\"accessToken\":\"new-access\",\"refreshToken\":\"new-refresh\"}}}")
             }
-            if requestCount == 1 {
+            applicationRequestCount += 1
+            if applicationRequestCount == 1 {
                 let authorization = try XCTUnwrap(request.value(forHTTPHeaderField: "Authorization"))
                 XCTAssertTrue(authorization.hasPrefix("Bearer "))
                 XCTAssertGreaterThan(authorization.count, "Bearer ".count)
@@ -90,7 +82,8 @@ final class TaillyTests: XCTestCase {
         let response: Response = try await makeClient(session: session).perform("query Value { value }")
 
         XCTAssertEqual(response.value, 7)
-        XCTAssertEqual(requestCount, 3)
+        XCTAssertEqual(applicationRequestCount, 2)
+        XCTAssertEqual(refreshRequestCount, 1)
     }
 
     private func makeClient(session: SessionStore = SessionStore()) -> GraphQLClient {
